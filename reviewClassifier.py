@@ -5,22 +5,36 @@ import pandas as pd
 import time
 import os
 
+# Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-llm = OpenAI(openai_api_key = OPENAI_API_KEY )
 
+# Initialize the language model
+llm = OpenAI(openai_api_key=OPENAI_API_KEY)
 
 def analyze_review(review_text, max_retries=3):
     prompt = f"""
-    Please analyze the sentiment of this review: '{review_text}' and classify it as Positive, Neutral, or Negative with a confidence score (0 - 1) and rating (0 - 5).
-    Only give the output in the format as JSON with keys 'classify', 'confidence_score', and 'rating'.
-    The data types of the values should be string, float, and int respectively.
+    Please analyze the sentiment of this review: '{review_text}' and classify it as Positive, Neutral, or Negative with a rating (0 - 5).
+    Also identify if any of these categories [Cleanliness, Staff Behaviour / Hospitality, Room Quality / Comfort, Food & Beverage, Location, Facilities / Amenities, Value for Money, Check-in / Check-out Process, Safety & Security, Noise Levels, Maintenance] are mentioned.
+    Only for each mentioned category, classify the sentiment as Positive, Neutral, or Negative.
+    Only give the output in the format as JSON with keys 'classify', 'rating', and a key for each identified category with its sentiment.
+    If none of the categories are mentioned, only include the 'classify' and 'rating' keys in the output.
+    The data types of the values should be string and int respectively.
+    Example output: {{
+        "classify": "Positive", 
+        "rating": 4,
+        "Cleanliness": "Positive",
+        "Staff Behaviour / Hospitality": "Neutral"
+    }} or {{
+        "classify": "Neutral",
+        "rating": 3
+    }}
     """
-    prompt = prompt + 'Example output: {"classify": "Positive", "confidence_score": 0.85, "rating": 4}'
     
     for attempt in range(max_retries):
         response = llm.invoke(prompt)
         print('#####################################################')
+        print('Review: ',review_text)
         print(response)
         
         try:
@@ -31,7 +45,7 @@ def analyze_review(review_text, max_retries=3):
             time.sleep(1)  # Adding a small delay before retrying
     
     # If all attempts fail, return a default response
-    return {"classify": "Neutral", "confidence_score": 0.0, "rating": 0}
+    return {"classify": "Neutral", "rating": 0}
 
 def main():
     try:
@@ -48,19 +62,24 @@ def main():
         print("Error parsing the CSV file.")
         return
     
+    # Ensure 'Merit' column exists in df_merit
+    if 'Merit' not in df_merit.columns:
+        df_merit['Merit'] = 0
+
     # Initialize new columns in the DataFrame
     df['classify'] = ""
-    df['confidence_score'] = 0.0
     df['rating'] = 0
 
+    # Loop over the rows of the DataFrame
     for index, row in df.iterrows():
         review_text = row['reviews_text']
         analysis_data = analyze_review(review_text)
+        
         # Update the DataFrame with the results
         df.at[index, 'classify'] = analysis_data['classify']
-        df.at[index, 'confidence_score'] = analysis_data['confidence_score']
         df.at[index, 'rating'] = int(analysis_data['rating'])
 
+        # Update the merit points in df_merit
         try:
             if 'positive' in analysis_data['classify'].lower():
                 df_merit.loc[df_merit['Hotel'] == 'Metro_Points_Hotel_Washington_North', 'Merit'] += 1
@@ -68,7 +87,19 @@ def main():
                 df_merit.loc[df_merit['Hotel'] == 'Metro_Points_Hotel_Washington_North', 'Merit'] -= 1
         except KeyError:
             print("Hotel not found in the Merit CSV")
+        
+        # Handle additional categories
+        categories = [
+            "Cleanliness", "Staff Behaviour / Hospitality", "Room Quality / Comfort", "Food & Beverage",
+            "Location", "Facilities / Amenities", "Value for Money", "Check-in / Check-out Process",
+            "Safety & Security", "Noise Levels", "Maintenance"
+        ]
 
+        for category in categories:
+            if category in analysis_data:
+                df.at[index, category] = analysis_data[category]
+
+    # Save the updated DataFrames to CSV files
     df.to_csv("output.csv", index=False)
     df_merit.to_csv('Merit.csv', index=False)
 
